@@ -1,0 +1,165 @@
+# infrastructure/docker-compose.yml
+#
+# Полный стек Forex Hybrid Bot
+# 4 сервиса: trading, ai, backtest, monitoring
+
+version: "3.9"
+
+services:
+
+  # ═══════════════════════════════════════
+  #  TRADING ENGINE (основной сервер)
+  # ═══════════════════════════════════════
+  trading:
+    build:
+      context: ..
+      dockerfile: infrastructure/Dockerfile.trading
+    container_name: forex_trading
+    restart: always
+    volumes:
+      - ../data:/app/data
+      - ../logs:/app/logs
+      - mt5_data:/mt5
+    environment:
+      - MODE=live
+      - MT5_LOGIN=${MT5_LOGIN}
+      - MT5_PASSWORD=${MT5_PASSWORD}
+      - MT5_SERVER=${MT5_SERVER}
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+      - TELEGRAM_CHAT=${TELEGRAM_CHAT}
+      - REDIS_HOST=redis
+      - DATA_LAKE_PATH=/app/data/lake
+    depends_on:
+      - redis
+    networks:
+      - forex_net
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 8G
+
+  # ═══════════════════════════════════════
+  #  AI SERVER (обучение + предсказания)
+  # ═══════════════════════════════════════
+  ai_server:
+    build:
+      context: ..
+      dockerfile: infrastructure/Dockerfile.ai
+    container_name: forex_ai
+    restart: unless-stopped
+    volumes:
+      - ../data:/app/data
+      - ../logs:/app/logs
+    environment:
+      - REDIS_HOST=redis
+      - DATA_LAKE_PATH=/app/data/lake
+      - TRAINING_INTERVAL_HOURS=24
+    depends_on:
+      - redis
+    networks:
+      - forex_net
+    deploy:
+      resources:
+        limits:
+          cpus: "8"
+          memory: 16G
+
+  # ═══════════════════════════════════════
+  #  BACKTEST SERVER
+  # ═══════════════════════════════════════
+  backtester:
+    build:
+      context: ..
+      dockerfile: infrastructure/Dockerfile.backtest
+    container_name: forex_backtest
+    restart: unless-stopped
+    volumes:
+      - ../data:/app/data
+      - ../logs:/app/logs
+    environment:
+      - REDIS_HOST=redis
+      - DATA_LAKE_PATH=/app/data/lake
+    depends_on:
+      - redis
+    networks:
+      - forex_net
+    deploy:
+      resources:
+        limits:
+          cpus: "8"
+          memory: 32G
+
+  # ═══════════════════════════════════════
+  #  DATA COLLECTOR
+  # ═══════════════════════════════════════
+  data_collector:
+    build:
+      context: ..
+      dockerfile: infrastructure/Dockerfile.collector
+    container_name: forex_collector
+    restart: always
+    volumes:
+      - ../data:/app/data
+    environment:
+      - MT5_LOGIN=${MT5_LOGIN}
+      - MT5_PASSWORD=${MT5_PASSWORD}
+      - MT5_SERVER=${MT5_SERVER}
+      - DATA_LAKE_PATH=/app/data/lake
+      - COLLECT_INTERVAL=60
+    depends_on:
+      - redis
+    networks:
+      - forex_net
+
+  # ═══════════════════════════════════════
+  #  REDIS (message bus)
+  # ═══════════════════════════════════════
+  redis:
+    image: redis:7-alpine
+    container_name: forex_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - forex_net
+
+  # ═══════════════════════════════════════
+  #  MONITORING (Prometheus + Grafana)
+  # ═══════════════════════════════════════
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: forex_prometheus
+    restart: always
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - forex_net
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: forex_grafana
+    restart: always
+    volumes:
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+    networks:
+      - forex_net
+
+volumes:
+  mt5_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  forex_net:
+    driver: bridge
